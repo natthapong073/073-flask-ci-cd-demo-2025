@@ -1,0 +1,106 @@
+name: Flask CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+env:
+  PYTHON_VERSION: '3.9'
+
+permissions:
+  contents: read
+  packages: write
+  security-events: write
+  pull-requests: write
+  actions: read
+
+jobs:
+  test:
+    name: Run Tests
+    runs-on: ubuntu-latest
+    
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: testpass
+          POSTGRES_USER: testuser
+          POSTGRES_DB: testdb
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U testuser"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+          
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          cd backend
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest-cov
+
+      - name: Install Redis CLI
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y redis-tools
+
+      - name: Wait for services
+        run: |
+          echo "Waiting for PostgreSQL..."
+          timeout 60 bash -c 'until pg_isready -h localhost -p 5432 -U testuser; do sleep 2; done'
+          echo "✅ PostgreSQL is ready!"
+          
+          echo "Waiting for Redis..."
+          timeout 60 bash -c 'until redis-cli -h localhost -p 6379 ping | grep -q PONG; do sleep 2; done'
+          echo "✅ Redis is ready!"
+
+      - name: Run tests with coverage
+        run: |
+          cd backend
+          export PYTHONPATH=.
+          export DATABASE_URL="postgresql://testuser:testpass@localhost:5432/testdb"
+          export REDIS_URL="redis://localhost:6379"
+          export FLASK_ENV=testing
+          pytest tests/ -v --cov=. --cov-report=xml --cov-report=html --cov-report=term
+        env:
+          SECRET_KEY: test-secret-key
+
+      - name: Upload coverage reports
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage-report
+          path: backend/htmlcov/
+          retention-days: 5
+
+      - name: Upload coverage XML
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage-xml
+          path: backend/coverage.xml
+          retention-days: 5
