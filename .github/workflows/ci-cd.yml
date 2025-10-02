@@ -1,6 +1,3 @@
-mkdir -p .github/workflows
-# สร้างไฟล์ .github/workflows/ci-cd.yml
-```yaml
 name: Flask CI/CD Pipeline
 
 on:
